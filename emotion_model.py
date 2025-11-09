@@ -1,23 +1,32 @@
-from transformers import pipeline
+import os
+import requests
+from dotenv import load_dotenv
 
-# Load once, return all scores so we can decide confidently
-emotion_classifier =pipeline("text-classification", model="bhadresh-savani/distilbert-base-uncased-emotion", top_k=1)
+load_dotenv()
 
-# Simple keyword assist to correct short/ambiguous inputs
-KEYWORDS = {
-    "happy":"joy","glad":"joy","excited":"joy","awesome":"joy",
-    "sad":"sadness","unhappy":"sadness","depressed":"sadness","cry":"sadness","low":"sadness","not good":"sadness","bad":"sadness","moody":"sadness",
-    "angry":"anger","mad":"anger","furious":"anger",
-    "scared":"fear","afraid":"fear","nervous":"fear","worried":"fear","anxious":"fear","anxiety":"fear",
-    "love":"love","like":"love","care":"love",
-    "shock":"surprise","wow":"surprise","unexpected":"surprise"
-}
+# Hugging Face API key (from environment or direct insert)
+HF_TOKEN = os.getenv("HF_API_KEY")
+
+API_URL = "https://api-inference.huggingface.co/models/bhadresh-savani/distilbert-base-uncased-emotion"
+HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
 
 def get_emotion(text: str) -> str:
-    t = text.lower()
-    for k,v in KEYWORDS.items():
-        if k in t:
-            return v
-    scores = emotion_classifier(text)[0]
-    best = max(scores, key=lambda x: x["score"])
-    return best["label"].lower()
+    """
+    Send text to Hugging Face API and return the dominant emotion label.
+    """
+    if not HF_TOKEN:
+        # fallback if no key
+        return "neutral"
+
+    payload = {"inputs": text}
+    try:
+        response = requests.post(API_URL, headers=HEADERS, json=payload, timeout=10)
+        data = response.json()
+        if isinstance(data, list) and len(data) > 0:
+            emotions = data[0]
+            best = max(emotions, key=lambda x: x["score"])
+            return best["label"].lower()
+        else:
+            return "neutral"
+    except Exception:
+        return "neutral"
