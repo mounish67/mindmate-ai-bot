@@ -1,0 +1,6 @@
+flask
+transformers
+torch
+nltk
+python-dotenv
+openai>=1.40.0

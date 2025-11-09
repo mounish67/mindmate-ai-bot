@@ -1,0 +1,53 @@
+{
+  "high_stress": [
+    {
+      "title": "Guided Meditation for Anxiety Relief",
+      "type": "YouTube",
+      "link": "https://www.youtube.com/watch?v=O-6f5wQXSu8"
+    },
+    {
+      "title": "5-Minute Breathing Exercise",
+      "type": "YouTube",
+      "link": "https://www.youtube.com/watch?v=sey9k2tK8Xk"
+    },
+    {
+      "title": "Calm Music for Stress Relief",
+      "type": "Audio",
+      "link": "https://www.youtube.com/watch?v=2OEL4P1Rz04"
+    }
+  ],
+  "moderate_stress": [
+    {
+      "title": "10-Minute Guided Relaxation",
+      "type": "YouTube",
+      "link": "https://www.youtube.com/watch?v=ZToicYcHIOU"
+    },
+    {
+      "title": "Gratitude Journaling Tips",
+      "type": "Article",
+      "link": "https://www.mindful.org/5-steps-to-gratitude-journaling/"
+    },
+    {
+      "title": "Positive Thinking Audio",
+      "type": "Audio",
+      "link": "https://www.youtube.com/watch?v=Qm2N5yTjFRc"
+    }
+  ],
+  "low_stress": [
+    {
+      "title": "Stay Consistent with Your Calm Routine",
+      "type": "Article",
+      "link": "https://www.headspace.com/meditation/stress"
+    },
+    {
+      "title": "Morning Energy Yoga",
+      "type": "YouTube",
+      "link": "https://www.youtube.com/watch?v=v7AYKMP6rOE"
+    },
+    {
+      "title": "Focus Music - LoFi Chill Beats",
+      "type": "Audio",
+      "link": "https://www.youtube.com/watch?v=jfKfPfyJRdk"
+    }
+  ]
+}
