@@ -1,6 +1,5 @@
-flask
+Flask
 transformers
 torch
-nltk
 python-dotenv
-openai>=1.40.0
+openai

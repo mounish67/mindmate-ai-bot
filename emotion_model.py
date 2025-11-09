@@ -1,11 +1,7 @@
 from transformers import pipeline
 
 # Load once, return all scores so we can decide confidently
-emotion_classifier = pipeline(
-    "text-classification",
-    model="j-hartmann/emotion-english-distilroberta-base",
-    return_all_scores=True
-)
+emotion_classifier =pipeline("text-classification", model="bhadresh-savani/distilbert-base-uncased-emotion", top_k=1)
 
 # Simple keyword assist to correct short/ambiguous inputs
 KEYWORDS = {
