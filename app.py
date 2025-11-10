@@ -11,8 +11,9 @@ OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
 app = Flask(__name__)
 
-# In-memory state for stress test
-user_states = {}  # { user_id: {"stage": "stress", "answers": [], "context": []} }
+# In-memory state
+# { "default_user": {"stage": None|"stress", "answers": [], "context": [], "offered_stress": False} }
+user_states = {}
 
 STRESS_QUESTIONS = [
     "Do you often feel overwhelmed or tense? (Often / Sometimes / Rarely)",
@@ -52,13 +53,16 @@ FALLBACK_RESPONSES = {
     ]
 }
 
-# --- GPT Reply Function ---
+# --- GPT Reply (HTTP API, robust) ---
 def gpt_reply(user_text: str, emotion: str) -> str:
-    """Use GPT (real-time) for empathetic replies."""
-    if not OPENAI_KEY:
-        return random.choice(FALLBACK_RESPONSES.get(emotion, FALLBACK_RESPONSES["neutral"]))
+    """Use OpenAI Chat Completions via HTTP; handle all common errors gracefully."""
+    fallback = random.choice(FALLBACK_RESPONSES.get(emotion, FALLBACK_RESPONSES["neutral"]))
 
-    # Detect sensitive or crisis messages
+    if not OPENAI_KEY:
+        print("⚠️ GPT ERROR: OPENAI_API_KEY not set")
+        return fallback
+
+    # Crisis safety
     crisis_terms = ["suicide", "kill myself", "end my life", "self harm", "cut myself", "hurt myself"]
     if any(term in user_text.lower() for term in crisis_terms):
         return (
@@ -70,15 +74,15 @@ def gpt_reply(user_text: str, emotion: str) -> str:
     system_prompt = (
         "You are MindMate, an empathetic AI wellness companion for youth. "
         "Respond naturally in 1–3 sentences. Be emotionally aware, supportive, and realistic. "
-        "Avoid robotic tone. Encourage small healthy actions like breathing, walking, journaling, or reflection. "
-        "Never diagnose or mention medical conditions."
+        "Encourage small healthy actions (breathing, walking, journaling, grounding). "
+        "Avoid clinical/diagnostic language. Keep tone warm and human, not robotic."
     )
 
     payload = {
         "model": "gpt-4o-mini",
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"User feels {emotion}. User said: {user_text}"}
+            {"role": "user", "content": f"Detected emotion: {emotion}. User said: {user_text}"}
         ],
         "temperature": 0.8,
         "max_tokens": 150
@@ -87,15 +91,30 @@ def gpt_reply(user_text: str, emotion: str) -> str:
     try:
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_KEY}"},
+            headers={"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"},
             json=payload,
             timeout=20
         )
+
+        if r.status_code != 200:
+            print(f"⚠️ GPT HTTP {r.status_code}: {r.text}")
+            return fallback
+
         data = r.json()
-        return data["choices"][0]["message"]["content"].strip()
+
+        # Normal shape
+        if isinstance(data, dict) and "choices" in data and data["choices"]:
+            content = data["choices"][0].get("message", {}).get("content", "")
+            if content:
+                return content.strip()
+
+        # Unexpected shape (SDK/endpoint variations)
+        print(f"⚠️ GPT unexpected payload: {data}")
+        return fallback
+
     except Exception as e:
         print(f"⚠️ GPT ERROR: {e}")
-        return random.choice(FALLBACK_RESPONSES.get(emotion, FALLBACK_RESPONSES["neutral"]))
+        return fallback
 
 # --- Stress Test Logic ---
 def score_stress(answers):
@@ -153,24 +172,32 @@ def index():
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    user_id = "default_user"
+    user_id = "default_user"  # simple single-user demo; can be replaced with sessions later
     text = request.form.get("message", "").strip()
     if not text:
         return jsonify({"reply": "Could you share that again?", "type": "chat"})
 
-    # Initialize user context
+    # Init state
     if user_id not in user_states:
-        user_states[user_id] = {"stage": None, "answers": [], "context": []}
-    user_states[user_id]["context"].append(text)
+        user_states[user_id] = {"stage": None, "answers": [], "context": [], "offered_stress": False}
 
-    # If user is in stress test mode
-    if user_states[user_id]["stage"] == "stress":
-        answers = user_states[user_id]["answers"]
-        answers.append(text)
-        if len(answers) >= 3:
-            score = score_stress(answers)
+    state = user_states[user_id]
+    state["context"].append(text)
+    if len(state["context"]) > 8:
+        state["context"] = state["context"][-8:]
+
+    # Reset/clear command
+    if any(k in text.lower() for k in ["restart", "reset", "clear chat", "start over"]):
+        user_states[user_id] = {"stage": None, "answers": [], "context": [], "offered_stress": False}
+        return jsonify({"reply": "Chat cleared 🌱. Hey there! How are you feeling today?", "type": "chat"})
+
+    # Ongoing stress test flow
+    if state["stage"] == "stress":
+        state["answers"].append(text)
+        if len(state["answers"]) >= 3:
+            score = score_stress(state["answers"])
             rec = stress_recommendation(score)
-            user_states[user_id] = {"stage": None, "answers": [], "context": []}
+            user_states[user_id] = {"stage": None, "answers": [], "context": [], "offered_stress": False}
             reply = (
                 f"🧘 Stress Level: {rec['level']}\n"
                 f"{rec['advice']}\n"
@@ -178,20 +205,24 @@ def chat():
             )
             return jsonify({"reply": reply, "type": "result"})
         else:
-            return jsonify({"reply": STRESS_QUESTIONS[len(answers)], "type": "stress"})
+            return jsonify({"reply": STRESS_QUESTIONS[len(state['answers'])], "type": "stress"})
 
     # Emotion detection
     emotion = get_emotion(text)
 
-    # Offer stress test
-    if any(k in text.lower() for k in ["not good", "sad", "depressed", "anxious", "angry", "stressed", "moody", "tired"]):
+    # Offer stress test if negative cues
+    if any(k in text.lower() for k in ["not good", "sad", "depressed", "anxious", "angry",
+                                       "stressed", "moody", "tired", "overwhelmed"]):
+        state["offered_stress"] = True
         return jsonify({"reply": "It sounds tough 😔. Want to take a quick 3-question stress check?", "type": "offer_test"})
 
-    # Start test if user agrees
-    if any(k in text.lower() for k in ["yes", "sure", "ok", "start", "take test"]):
-        user_states[user_id]["stage"] = "stress"
-        user_states[user_id]["answers"] = []
-        return jsonify({"reply": STRESS_QUESTIONS[0], "type": "stress"})
+    # Start test if user agrees and it was offered recently
+    if any(k in text.lower() for k in ["yes", "sure", "ok", "start", "take test", "let's do it", "yeah"]):
+        if state.get("offered_stress", False):
+            state["stage"] = "stress"
+            state["answers"] = []
+            state["offered_stress"] = False
+            return jsonify({"reply": STRESS_QUESTIONS[0], "type": "stress"})
 
     # Smart relaxation suggestions
     if any(k in text.lower() for k in ["relax", "stress relief", "calm", "meditate", "breathe", "anger control"]):
@@ -204,10 +235,10 @@ def chat():
         )
         return jsonify({"reply": reply, "type": "resource"})
 
-    # Otherwise, GPT reply
+    # Otherwise, GPT reply (real-time)
     reply = gpt_reply(text, emotion)
     return jsonify({"reply": reply, "type": "chat"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port)  # keep debug off in production
