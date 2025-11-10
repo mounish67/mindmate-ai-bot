@@ -1,28 +1,18 @@
 import os
 import random
-import uuid
-from datetime import timedelta
-from flask import Flask, render_template, request, jsonify, session
+import requests
+from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 from emotion_model import get_emotion
 
-# --- setup ---
+# --- Setup ---
 load_dotenv()
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
-# OpenAI (new SDK)
-try:
-    from openai import OpenAI
-    oai_client = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
-except Exception:
-    oai_client = None
-
 app = Flask(__name__)
-app.secret_key = "mindmate_secret_key"
-app.permanent_session_lifetime = timedelta(hours=1)
 
-# Store user-specific states
-user_states = {}  # { user_id: {"context":[], "stage":None, "answers":[]} }
+# In-memory state for stress test
+user_states = {}  # { user_id: {"stage": "stress", "answers": [], "context": []} }
 
 STRESS_QUESTIONS = [
     "Do you often feel overwhelmed or tense? (Often / Sometimes / Rarely)",
@@ -30,10 +20,11 @@ STRESS_QUESTIONS = [
     "Do you find it hard to focus on tasks? (Often / Sometimes / Rarely)"
 ]
 
+# Fallbacks if GPT fails
 FALLBACK_RESPONSES = {
     "joy": [
         "That’s lovely to hear! What made your day brighter?",
-        "I love that energy—want to share what went well?"
+        "I love that energy—want to share what went well? 😊"
     ],
     "love": [
         "Love brings warmth—hold onto that feeling. 💚",
@@ -44,16 +35,16 @@ FALLBACK_RESPONSES = {
         "It’s okay to not be okay—what would feel supportive right now?"
     ],
     "fear": [
-        "That sounds unsettling. Let’s slow down—what’s worrying you most?",
+        "That sounds unsettling. Let’s slow down—what’s the biggest worry?",
         "You’re not alone. Would grounding or breathing help?"
     ],
     "anger": [
         "It’s valid to feel angry. What triggered it?",
-        "Let’s unpack that anger gently—what would help release it?"
+        "Let’s unpack it—what might help release that tension?"
     ],
     "surprise": [
-        "Whoa—unexpected! How are you feeling about it now?",
-        "Surprises can throw us off—was it good or tough?"
+        "Whoa, that’s unexpected! How are you feeling about it now?",
+        "Surprises can throw us off—good or tough kind?"
     ],
     "neutral": [
         "I’m here—what’s been on your mind today?",
@@ -61,49 +52,52 @@ FALLBACK_RESPONSES = {
     ]
 }
 
+# --- GPT Reply Function ---
 def gpt_reply(user_text: str, emotion: str) -> str:
-    """
-    Use ChatGPT to craft a short, empathetic, safe reply.
-    Falls back to rule-based responses if API key is missing.
-    """
-    if not oai_client:
+    """Use GPT (real-time) for empathetic replies."""
+    if not OPENAI_KEY:
         return random.choice(FALLBACK_RESPONSES.get(emotion, FALLBACK_RESPONSES["neutral"]))
 
-    crisis_terms = ["suicide","kill myself","end my life","self harm","cut myself","hurt myself"]
+    # Detect sensitive or crisis messages
+    crisis_terms = ["suicide", "kill myself", "end my life", "self harm", "cut myself", "hurt myself"]
     if any(term in user_text.lower() for term in crisis_terms):
         return (
-            "I’m really glad you told me. Your safety matters. "
-            "If you’re in immediate danger, please call your local emergency number (e.g., 112 in India) "
-            "or reach out to a trusted person nearby right now. You’re not alone."
+            "I'm really glad you told me this. Your safety matters deeply. 💛 "
+            "If you’re in danger, please call your local emergency number (e.g., 112 in India) "
+            "or reach out to a trusted person nearby right now."
         )
 
     system_prompt = (
-        "You are MindMate, a warm, youth-focused mental wellness companion. "
-        "Goals: (1) respond in 1–3 short sentences, (2) be empathetic and validating, "
-        "(3) offer a gentle, practical next step (breathing, grounding, journaling, tiny action), "
-        "and (4) end with one kind follow-up question. "
-        "Never diagnose or claim medical authority. "
-        "Keep a calm, hopeful tone. Use emojis sparingly (0–1). "
-        "Special focus: if user mentions stress, anger, or anxiety, "
-        "suggest relaxation, breathing, or journaling techniques naturally within response."
+        "You are MindMate, an empathetic AI wellness companion for youth. "
+        "Respond naturally in 1–3 sentences. Be emotionally aware, supportive, and realistic. "
+        "Avoid robotic tone. Encourage small healthy actions like breathing, walking, journaling, or reflection. "
+        "Never diagnose or mention medical conditions."
     )
 
-    user_context = f"Detected emotion: {emotion}. User said: {user_text}"
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"User feels {emotion}. User said: {user_text}"}
+        ],
+        "temperature": 0.8,
+        "max_tokens": 150
+    }
 
     try:
-        resp = oai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_context}
-            ],
-            temperature=0.7,
-            max_tokens=120,
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_KEY}"},
+            json=payload,
+            timeout=20
         )
-        return resp.choices[0].message.content.strip()
-    except Exception:
+        data = r.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"⚠️ GPT ERROR: {e}")
         return random.choice(FALLBACK_RESPONSES.get(emotion, FALLBACK_RESPONSES["neutral"]))
 
+# --- Stress Test Logic ---
 def score_stress(answers):
     total = 0
     for a in answers:
@@ -118,39 +112,38 @@ def stress_recommendation(score):
         return {
             "level": "High",
             "advice": (
-                "Your stress seems high 😟. Consider a 3–5 minute breathing routine "
-                "(inhale 4s, hold 4s, exhale 6s), short walk, and journaling your thoughts. "
-                "If it feels unsafe, please reach out to emergency services (112 in India) or a trusted person."
+                "Your stress seems high 😟. Try 3–5 minutes of deep breathing (inhale 4s, hold 4s, exhale 6s), "
+                "go for a walk, or write down what feels heavy. Talk to someone you trust."
             ),
             "actions": [
-                "Try box-breathing (4-4-4-4) for 2 minutes",
-                "Take a short walk",
-                "Text or call a friend you trust"
+                "Do box-breathing (4-4-4-4)",
+                "Step outside for 5 minutes",
+                "Call or text a trusted friend"
             ]
         }
     elif score >= 4:
         return {
             "level": "Moderate",
             "advice": (
-                "There are signs of stress. Small habits help: 10 deep breaths, 5-minute stretch, "
-                "and write one thought you want to release."
+                "Some tension shows up—try 10 slow breaths or gentle stretching. "
+                "Finish a small task to regain focus 💪."
             ),
             "actions": [
-                "Take 10 deep breaths (inhale 4s, exhale 6s)",
-                "5-minute body stretch",
-                "Write 3 thoughts you want to let go"
+                "Breathe deeply 10 times",
+                "Stretch your arms and back",
+                "Write 3 things you're grateful for"
             ]
         }
     else:
         return {
             "level": "Low",
             "advice": (
-                "Nice—your stress seems manageable. Keep up your positive habits: rest, hydration, and small joys."
+                "Nice—stress looks manageable! Keep up your habits like good sleep, hydration, and small joys."
             ),
             "actions": [
-                "Note 3 things you’re grateful for",
-                "Drink some water and move a bit",
-                "Do something you enjoy for 5 minutes"
+                "Do a 5-min gratitude note",
+                "Drink water",
+                "Plan one small enjoyable activity today"
             ]
         }
 
@@ -160,64 +153,61 @@ def index():
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    # Identify user session
-    if "user_id" not in session:
-        session["user_id"] = str(uuid.uuid4())
-    user_id = session["user_id"]
-
-    if user_id not in user_states:
-        user_states[user_id] = {"context": [], "stage": None, "answers": []}
-
+    user_id = "default_user"
     text = request.form.get("message", "").strip()
     if not text:
         return jsonify({"reply": "Could you share that again?", "type": "chat"})
 
-    # Handle chat reset
-    if any(word in text.lower() for word in ["restart", "clear chat", "start over", "reset"]):
-        user_states[user_id] = {"context": [], "stage": None, "answers": []}
-        return jsonify({"reply": "Chat cleared 🌱. Hey there! How are you feeling today?", "type": "chat"})
+    # Initialize user context
+    if user_id not in user_states:
+        user_states[user_id] = {"stage": None, "answers": [], "context": []}
+    user_states[user_id]["context"].append(text)
 
-    # Handle ongoing stress test
+    # If user is in stress test mode
     if user_states[user_id]["stage"] == "stress":
         answers = user_states[user_id]["answers"]
         answers.append(text)
         if len(answers) >= 3:
             score = score_stress(answers)
             rec = stress_recommendation(score)
-            user_states[user_id]["stage"] = None
-            user_states[user_id]["answers"] = []
+            user_states[user_id] = {"stage": None, "answers": [], "context": []}
             reply = (
-                f"Stress level: {rec['level']}\n"
+                f"🧘 Stress Level: {rec['level']}\n"
                 f"{rec['advice']}\n"
-                f"Suggested actions:\n• {rec['actions'][0]}\n• {rec['actions'][1]}\n• {rec['actions'][2]}"
+                f"Suggested actions: • {rec['actions'][0]} • {rec['actions'][1]} • {rec['actions'][2]}"
             )
             return jsonify({"reply": reply, "type": "result"})
         else:
-            q_idx = len(answers)
-            return jsonify({"reply": STRESS_QUESTIONS[q_idx], "type": "stress"})
+            return jsonify({"reply": STRESS_QUESTIONS[len(answers)], "type": "stress"})
 
-    # Detect emotion and handle special cases
+    # Emotion detection
     emotion = get_emotion(text)
 
-    if any(k in text.lower() for k in ["not good", "sad", "down", "depressed", "anxious", "angry", "overwhelmed", "tired", "moody"]):
+    # Offer stress test
+    if any(k in text.lower() for k in ["not good", "sad", "depressed", "anxious", "angry", "stressed", "moody", "tired"]):
         return jsonify({"reply": "It sounds tough 😔. Want to take a quick 3-question stress check?", "type": "offer_test"})
 
-    if any(k in text.lower() for k in ["start test", "take test", "yes start", "ok start", "yes, start"]):
+    # Start test if user agrees
+    if any(k in text.lower() for k in ["yes", "sure", "ok", "start", "take test"]):
         user_states[user_id]["stage"] = "stress"
         user_states[user_id]["answers"] = []
         return jsonify({"reply": STRESS_QUESTIONS[0], "type": "stress"})
 
-    # Maintain session context
-    user_states[user_id]["context"].append(f"User: {text}")
-    if len(user_states[user_id]["context"]) > 6:
-        user_states[user_id]["context"] = user_states[user_id]["context"][-6:]
+    # Smart relaxation suggestions
+    if any(k in text.lower() for k in ["relax", "stress relief", "calm", "meditate", "breathe", "anger control"]):
+        reply = (
+            "Here are some quick relaxation tools 🌿:\n\n"
+            "• [10-Minute Guided Relaxation (YouTube)](https://www.youtube.com/watch?v=inpok4MKVLM)\n"
+            "• [Gratitude Journaling Tips (Article)](https://positivepsychology.com/gratitude-journal/)\n"
+            "• [Positive Thinking Audio (Spotify)](https://open.spotify.com/track/6dGnYIeXmHdcikdzNNDMm2)\n\n"
+            "Would you like to take the short stress test too?"
+        )
+        return jsonify({"reply": reply, "type": "resource"})
 
-    context_text = "\n".join(user_states[user_id]["context"])
-    reply = gpt_reply(f"Conversation so far:\n{context_text}\nUser latest: {text}", emotion)
-    user_states[user_id]["context"].append(f"MindMate: {reply}")
-
+    # Otherwise, GPT reply
+    reply = gpt_reply(text, emotion)
     return jsonify({"reply": reply, "type": "chat"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
