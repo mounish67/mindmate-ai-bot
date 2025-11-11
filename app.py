@@ -5,9 +5,9 @@ from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 from emotion_model import get_emotion
 
-# ── Setup ───────────────────────────────────────────────────────
+# ─── Setup ────────────────────────────────────────────
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # <–– Set this in .env or Render Environment
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # <-- Set this in Render environment or .env file
 
 app = Flask(__name__)
 
@@ -20,10 +20,11 @@ STRESS_QUESTIONS = [
 ]
 
 RELAXATION_SNIPPET = (
-    "Here are some relaxation tools 🌿:\n"
-    "• 10-Minute Guided Relaxation (YouTube): https://www.youtube.com/watch?v=inpok4MKVLM\n"
-    "• Gratitude Journaling Tips (Article): https://positivepsychology.com/gratitude-journal/\n"
-    "• Positive Thinking Audio (Spotify): https://open.spotify.com/track/6dGnYIeXmHdcikdzNNDMm2\n"
+    "Here are some quick relaxation tools 🌿:\n"
+    "• [10-Minute Guided Relaxation (YouTube)](https://www.youtube.com/watch?v=inpok4MKVLM)\n"
+    "• [Gratitude Journaling Tips (Article)](https://positivepsychology.com/gratitude-journal/)\n"
+    "• [Positive Thinking Audio (Spotify)](https://open.spotify.com/track/6dGnYIeXmHdcikdzNNDMm2)\n\n"
+    "Would you like to take a short 3-question stress check?"
 )
 
 FALLBACK_RESPONSES = {
@@ -35,7 +36,7 @@ FALLBACK_RESPONSES = {
     "neutral": ["I’m here — what’s been on your mind today?"]
 }
 
-# ── Helpers ───────────────────────────────────────────────────────
+# ─── Context Handling ────────────────────────────────────────────
 def add_context(role: str, text: str, keep_last: int = 8):
     state["context"].append(f"{role}: {text}")
     if len(state["context"]) > keep_last:
@@ -44,17 +45,18 @@ def add_context(role: str, text: str, keep_last: int = 8):
 def recent_context_text() -> str:
     return "\n".join(state["context"][-8:])
 
-# ── GEMINI Reply ───────────────────────────────────────────────────────
+# ─── Gemini Reply ────────────────────────────────────────────
 def gemini_reply(user_text: str, emotion: str) -> str:
-    """Send chat to Google Gemini and return a natural, empathetic reply."""
+    """Send user message to Google Gemini API and return natural response."""
     if not GEMINI_API_KEY:
         return random.choice(FALLBACK_RESPONSES.get(emotion, FALLBACK_RESPONSES["neutral"]))
 
     system_prompt = (
-        "You are MindMate, a warm, human-like AI mental wellness companion. "
-        "Be empathetic, supportive, and natural. Use 1–3 short sentences. "
-        "Validate emotions, offer a small helpful action (like deep breathing, journaling, or walking), "
-        "and end with a gentle follow-up question. Avoid clinical or diagnostic terms."
+        "You are MindMate, an empathetic AI wellness companion for youth. "
+        "Respond like a caring friend in 1–3 sentences. "
+        "Be emotionally supportive, gentle, and helpful. "
+        "Avoid clinical or diagnostic tone. Offer small grounding or coping suggestions. "
+        "End with a kind, open-ended question."
     )
 
     payload = {
@@ -65,7 +67,7 @@ def gemini_reply(user_text: str, emotion: str) -> str:
                     {
                         "text": f"{system_prompt}\n\nRecent conversation:\n{recent_context_text()}\n\nUser ({emotion}): {user_text}"
                     }
-                ],
+                ]
             }
         ]
     }
@@ -78,16 +80,16 @@ def gemini_reply(user_text: str, emotion: str) -> str:
             timeout=15
         )
         data = response.json()
-        return (
-            data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            if "candidates" in data
-            else random.choice(FALLBACK_RESPONSES.get(emotion, FALLBACK_RESPONSES["neutral"]))
-        )
+        if "candidates" in data and data["candidates"]:
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        else:
+            print("⚠️ Unexpected Gemini response:", data)
+            return random.choice(FALLBACK_RESPONSES.get(emotion, FALLBACK_RESPONSES["neutral"]))
     except Exception as e:
         print(f"⚠️ GEMINI ERROR: {e}")
         return random.choice(FALLBACK_RESPONSES.get(emotion, FALLBACK_RESPONSES["neutral"]))
 
-# ── Stress Logic ───────────────────────────────────────────────────────
+# ─── Stress Logic ────────────────────────────────────────────
 def score_stress(answers):
     total = 0
     for a in answers:
@@ -101,23 +103,23 @@ def stress_recommendation(score):
     if score >= 7:
         return {
             "level": "High",
-            "advice": "Your stress seems high 😟. Try deep breathing (4-4-6), take a 5-minute walk, or talk to a friend.",
-            "actions": ["Box breathing (4-4-6)", "Short walk", "Call a trusted person"]
+            "advice": "Your stress seems high 😟. Try 3–5 minutes of deep breathing (4–4–6), take a short walk, or talk to someone you trust.",
+            "actions": ["Box breathing (4–4–6)", "Take a 5-minute walk", "Call a friend or family member"]
         }
     elif score >= 4:
         return {
             "level": "Moderate",
-            "advice": "You seem a bit tense. Try 10 deep breaths, stretch for a minute, or write your thoughts down 💪.",
-            "actions": ["10 deep breaths", "Stretch briefly", "Jot thoughts in notes"]
+            "advice": "You seem a bit tense. Try 10 deep breaths or stretch for a minute. Maybe write down your thoughts 💪.",
+            "actions": ["10 deep breaths", "Stretch your shoulders", "Write 3 thoughts you want to let go of"]
         }
     else:
         return {
             "level": "Low",
-            "advice": "Stress seems manageable 🌱. Keep your good habits — rest, hydrate, and stay positive.",
-            "actions": ["Drink water", "5-min gratitude note", "Plan a mini reward"]
+            "advice": "Your stress looks manageable 🌱. Keep your healthy habits and enjoy something you love today.",
+            "actions": ["Drink water", "Take 5-min break", "Note one thing you're grateful for"]
         }
 
-# ── Routes ───────────────────────────────────────────────────────
+# ─── Routes ────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -130,23 +132,24 @@ def chat():
 
     add_context("User", text)
 
-    # Stress flow
+    # --- Stress Flow Handling ---
     if state["stage"] == "stress":
         state["answers"].append(text)
-        if len(state["answers"]) >= 3:
+        if len(state["answers"]) < 3:
+            next_q = STRESS_QUESTIONS[len(state["answers"])]
+            add_context("MindMate", next_q)
+            return jsonify({"reply": next_q, "type": "stress"})
+        else:
             score = score_stress(state["answers"])
             rec = stress_recommendation(score)
             state.update({"stage": None, "answers": [], "offered_stress": False})
             reply = (
-                f"🧘 Stress Level: {rec['level']}\n{rec['advice']}\n"
+                f"🧘 Stress Level: {rec['level']}\n"
+                f"{rec['advice']}\n"
                 f"Suggested actions:\n• {rec['actions'][0]}\n• {rec['actions'][1]}\n• {rec['actions'][2]}"
             )
             add_context("MindMate", reply)
             return jsonify({"reply": reply, "type": "result"})
-        else:
-            q = STRESS_QUESTIONS[len(state["answers"])]
-            add_context("MindMate", q)
-            return jsonify({"reply": q, "type": "stress"})
 
     # Offer stress test
     if any(k in text.lower() for k in ["not good", "sad", "anxious", "stressed", "tensed", "depressed"]):
@@ -162,17 +165,18 @@ def chat():
         add_context("MindMate", q)
         return jsonify({"reply": q, "type": "stress"})
 
-    # Relaxation resources
+    # Relaxation tools
     if any(k in text.lower() for k in ["relax", "calm", "breathe", "meditate", "anger control", "cool down"]):
         add_context("MindMate", RELAXATION_SNIPPET)
         return jsonify({"reply": RELAXATION_SNIPPET, "type": "resource"})
 
-    # Emotion analysis + Gemini response
+    # Regular chat via Gemini
     emotion = get_emotion(text)
     reply = gemini_reply(text, emotion)
     add_context("MindMate", reply)
     return jsonify({"reply": reply, "type": "chat"})
 
+# ─── Run App ────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
